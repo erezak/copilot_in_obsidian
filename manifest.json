@@ -1,0 +1,10 @@
+{
+  "id": "copilot-vault-agent",
+  "name": "Copilot Vault Agent",
+  "version": "1.0.0",
+  "minAppVersion": "1.4.0",
+  "description": "Chat with your vault using GitHub Copilot / GitHub Models. The AI agent can read, create, and edit notes.",
+  "author": "You",
+  "authorUrl": "",
+  "isDesktopOnly": true
+}
