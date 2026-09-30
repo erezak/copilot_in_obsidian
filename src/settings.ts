@@ -1,4 +1,5 @@
-import { PluginSettingTab, Setting } from "obsidian";
+import { App, PluginSettingTab, Setting } from "obsidian";
+import { CopilotClient } from "@github/copilot-sdk";
 import type CopilotPlugin from "./main";
 
 export interface CopilotSettings {
@@ -27,7 +28,7 @@ export class CopilotSettingTab extends PluginSettingTab {
     containerEl.createEl("h2", { text: "Copilot Vault Agent" });
 
     containerEl.createEl("p", {
-      text: "Uses the GitHub Copilot CLI installed on your system. No token configuration needed — auth is managed by the CLI.",
+      text: "Uses the GitHub Copilot SDK. No token configuration needed — auth is managed by the CLI.",
     });
 
     // ── Model ─────────────────────────────────────────────────────────────────
@@ -88,15 +89,14 @@ export class CopilotSettingTab extends PluginSettingTab {
 
   private async checkCLIStatus(setting: Setting): Promise<void> {
     try {
-      const { execFile } = await import("child_process");
-      await new Promise<void>((resolve, reject) => {
-        execFile("copilot", ["--version"], { timeout: 5000 }, (err, stdout) => {
-          if (err) reject(err);
-          else { setting.setDesc(`✓ ${stdout.trim()}`); resolve(); }
-        });
-      });
+      const cliUrl = await this.plugin.cliManager.start();
+      const client = new CopilotClient({ logLevel: "none", cliUrl });
+      await client.start();
+      const resp = await client.ping("health");
+      await client.stop();
+      setting.setDesc(`✓ Connected (${new Date(resp.timestamp).toLocaleTimeString()})`);
     } catch {
-      setting.setDesc("⚠ copilot CLI not found. Install it with: npm install -g @github/copilot-cli  or via brew/winget.");
+      setting.setDesc("⚠ Could not connect to Copilot CLI. Check that @github/copilot is installed in the plugin directory.");
     }
   }
 }

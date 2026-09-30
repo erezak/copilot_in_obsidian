@@ -5,7 +5,8 @@
   "main": "main.js",
   "scripts": {
     "dev": "node esbuild.config.mjs",
-    "build": "tsc --noEmit --skipLibCheck && node esbuild.config.mjs production"
+    "build": "tsc --noEmit --skipLibCheck && node esbuild.config.mjs production",
+    "deploy": "pnpm run build && node deploy.mjs"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
@@ -15,6 +16,7 @@
     "typescript": "^5.8.0"
   },
   "dependencies": {
+    "@github/copilot": "^1.0.32",
     "@github/copilot-sdk": "^0.2.2"
   }
 }

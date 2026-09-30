@@ -1,4 +1,5 @@
 import { Plugin, WorkspaceLeaf } from "obsidian";
+import { join } from "node:path";
 import {
   CopilotSettings,
   CopilotSettingTab,
@@ -8,12 +9,19 @@ import {
   CopilotChatView,
   VIEW_TYPE_COPILOT,
 } from "./views/CopilotChatView";
+import { CliManager } from "./cliManager";
 
 export default class CopilotPlugin extends Plugin {
   settings!: CopilotSettings;
+  cliManager!: CliManager;
 
   async onload(): Promise<void> {
     await this.loadSettings();
+
+    const adapter = this.app.vault.adapter as { basePath?: string; getBasePath?: () => string };
+    const vaultBase = adapter.getBasePath?.() ?? adapter.basePath ?? "";
+    const cliPath = join(vaultBase, this.manifest.dir ?? "", "node_modules", "@github", "copilot", "index.js");
+    this.cliManager = new CliManager(cliPath);
 
     this.registerView(
       VIEW_TYPE_COPILOT,
@@ -40,6 +48,7 @@ export default class CopilotPlugin extends Plugin {
   }
 
   onunload(): void {
+    void this.cliManager?.stop();
     this.app.workspace.detachLeavesOfType(VIEW_TYPE_COPILOT);
   }
 

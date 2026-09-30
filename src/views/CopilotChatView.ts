@@ -4,12 +4,16 @@ import {
   Notice,
   WorkspaceLeaf,
 } from "obsidian";
+import { join } from "node:path";
+import {
+  CopilotClient,
+  approveAll,
+  type CopilotSession,
+  type SessionEvent,
+} from "@github/copilot-sdk";
 import type CopilotPlugin from "../main";
-import { CopilotCLIClient, type CopilotEvent, type FileAttachment } from "../api/CopilotCLI";
 
 export const VIEW_TYPE_COPILOT = "copilot-vault-agent-view";
-
-// ── Example prompts shown on the welcome screen ───────────────────────────────
 
 const EXAMPLE_PROMPTS = [
   "Summarise my current note",
@@ -18,12 +22,10 @@ const EXAMPLE_PROMPTS = [
   "Add a ## Summary section to this note",
 ];
 
-// ── Main chat view ────────────────────────────────────────────────────────────
-
 export class CopilotChatView extends ItemView {
   private plugin: CopilotPlugin;
-  private cli: CopilotCLIClient | null = null;
-  private sessionId: string | null = null;
+  private client: CopilotClient | null = null;
+  private session: CopilotSession | null = null;
 
   // UI elements
   private messagesEl!: HTMLElement;
@@ -34,7 +36,6 @@ export class CopilotChatView extends ItemView {
   private contextBarEl!: HTMLElement;
 
   private isProcessing = false;
-  private abortController: AbortController | null = null;
 
   constructor(leaf: WorkspaceLeaf, plugin: CopilotPlugin) {
     super(leaf);
@@ -66,10 +67,7 @@ export class CopilotChatView extends ItemView {
   }
 
   async onClose(): Promise<void> {
-    this.abortController?.abort();
-    await this.destroySession();
-    this.cli?.stop();
-    this.cli = null;
+    await this.teardown();
   }
 
   refreshSettings(): void {
@@ -113,7 +111,7 @@ export class CopilotChatView extends ItemView {
 
     this.stopBtn = btnRow.createEl("button", { cls: "cva-stop-btn", text: "■ Stop" });
     this.stopBtn.style.display = "none";
-    this.stopBtn.addEventListener("click", () => this.abortController?.abort());
+    this.stopBtn.addEventListener("click", () => void this.session?.abort());
 
     this.sendBtn = btnRow.createEl("button", { cls: "cva-send-btn", text: "Send ↵" });
     this.sendBtn.addEventListener("click", () => void this.handleSend());
@@ -133,45 +131,61 @@ export class CopilotChatView extends ItemView {
     }
   }
 
-  // ── CLI session management ───────────────────────────────────────────────────
+  // ── SDK session management ──────────────────────────────────────────────────
 
   private getVaultPath(): string {
     const adapter = this.app.vault.adapter as { basePath?: string; getBasePath?: () => string };
     return adapter.getBasePath?.() ?? adapter.basePath ?? this.app.vault.getName();
   }
 
-  private async ensureSession(): Promise<string> {
-    if (this.cli && this.sessionId && this.cli.isRunning) {
-      return this.sessionId;
+  private getPluginDir(): string {
+    const adapter = this.app.vault.adapter as { basePath?: string; getBasePath?: () => string };
+    const vaultBase = adapter.getBasePath?.() ?? adapter.basePath ?? "";
+    return join(vaultBase, this.plugin.manifest.dir ?? "");
+  }
+
+  private async ensureSession(): Promise<CopilotSession> {
+    if (this.client && this.session) {
+      return this.session;
     }
 
-    if (this.cli) {
-      this.cli.stop();
-      this.cli = null;
-      this.sessionId = null;
-    }
+    await this.teardown();
 
     this.setStatus("Starting Copilot CLI…");
-    const client = new CopilotCLIClient();
+    const cliUrl = await this.plugin.cliManager.start();
+    const client = new CopilotClient({ logLevel: "warning", cliUrl });
     await client.start();
-    this.cli = client;
+    this.client = client;
 
     this.setStatus("Creating session…");
     const vaultPath = this.getVaultPath();
-    const sid = await client.createSession(
-      vaultPath,
-      this.plugin.settings.systemPromptAddition || undefined,
-      this.plugin.settings.model || undefined
-    );
-    this.sessionId = sid;
+    const skillsDir = join(this.getPluginDir(), "skills");
+    const settings = this.plugin.settings;
+
+    const session = await client.createSession({
+      model: settings.model || undefined,
+      workingDirectory: vaultPath,
+      skillDirectories: [skillsDir],
+      streaming: true,
+      onPermissionRequest: approveAll,
+      systemMessage: settings.systemPromptAddition
+        ? { mode: "append", content: settings.systemPromptAddition }
+        : undefined,
+    });
+
+    this.session = session;
     this.setStatus("");
-    return sid;
+    return session;
   }
 
-  private async destroySession(): Promise<void> {
-    if (this.cli && this.sessionId) {
-      await this.cli.destroySession(this.sessionId).catch(() => { /* ignore */ });
-      this.sessionId = null;
+  private async teardown(): Promise<void> {
+    if (this.session) {
+      await this.session.destroy().catch(() => { /* ignore */ });
+      this.session = null;
+    }
+    if (this.client) {
+      await this.client.stop().catch(() => { /* ignore */ });
+      this.client = null;
     }
   }
 
@@ -188,7 +202,7 @@ export class CopilotChatView extends ItemView {
     this.appendUserMessage(text);
 
     // Build file attachment for active note
-    const attachments: FileAttachment[] = [];
+    const attachments: Array<{ type: "file"; path: string; displayName?: string }> = [];
     if (this.plugin.settings.includeActiveFile) {
       const file = this.app.workspace.getActiveFile();
       if (file) {
@@ -200,15 +214,16 @@ export class CopilotChatView extends ItemView {
     }
 
     const { updateContent } = this.createStreamingBubble();
+    const { updateThinking, finalizeThinking } = this.createThinkingBubble();
 
     try {
-      const sessionId = await this.ensureSession();
-      this.abortController = new AbortController();
+      const session = await this.ensureSession();
 
       let accumulated = "";
+      let accumulatedThinking = "";
       let renderTimer: ReturnType<typeof setTimeout> | null = null;
+      let thinkingTimer: ReturnType<typeof setTimeout> | null = null;
 
-      // Re-render markdown at most every 50 ms to avoid flooding the DOM
       const scheduleRender = () => {
         if (renderTimer !== null) return;
         renderTimer = setTimeout(() => {
@@ -217,25 +232,66 @@ export class CopilotChatView extends ItemView {
         }, 50);
       };
 
-      await this.cli!.send(sessionId, text, attachments, (event: CopilotEvent) => {
-        if (event.type === "text_delta") {
-          accumulated += event.delta;
-          scheduleRender();
-        } else if (event.type === "text") {
-          // Final authoritative content — flush immediately
-          accumulated = event.content;
-          if (renderTimer !== null) { clearTimeout(renderTimer); renderTimer = null; }
-          updateContent(accumulated);
-        } else if (event.type === "tool_start") {
-          this.setStatus(`🔧 ${event.toolName}…`);
-        } else if (event.type === "tool_done") {
-          this.setStatus("");
-        } else if (event.type === "idle") {
-          this.setStatus("");
-        }
-      }, this.abortController.signal);
+      const scheduleThinkingRender = () => {
+        if (thinkingTimer !== null) return;
+        thinkingTimer = setTimeout(() => {
+          thinkingTimer = null;
+          updateThinking(accumulatedThinking);
+        }, 50);
+      };
+
+      await new Promise<void>((resolve, reject) => {
+        const unsubscribe = session.on((event: SessionEvent) => {
+          switch (event.type) {
+            case "assistant.reasoning_delta":
+              accumulatedThinking += event.data.deltaContent;
+              scheduleThinkingRender();
+              break;
+            case "assistant.reasoning":
+              accumulatedThinking = event.data.content;
+              if (thinkingTimer !== null) { clearTimeout(thinkingTimer); thinkingTimer = null; }
+              finalizeThinking(accumulatedThinking);
+              break;
+            case "assistant.message_delta":
+              accumulated += event.data.deltaContent;
+              scheduleRender();
+              break;
+            case "assistant.message":
+              accumulated = event.data.content;
+              if (renderTimer !== null) { clearTimeout(renderTimer); renderTimer = null; }
+              updateContent(accumulated);
+              break;
+            case "tool.execution_start":
+              this.setStatus(`🔧 ${event.data.toolName}…`);
+              break;
+            case "tool.execution_complete":
+              this.setStatus("");
+              break;
+            case "session.idle":
+              this.setStatus("");
+              unsubscribe();
+              resolve();
+              break;
+            case "session.error":
+              this.setStatus("");
+              unsubscribe();
+              reject(new Error(event.data.message));
+              break;
+          }
+        });
+
+        session.send({
+          prompt: text,
+          attachments: attachments.length > 0 ? attachments : undefined,
+        }).catch((err: Error) => {
+          unsubscribe();
+          reject(err);
+        });
+      });
 
       if (renderTimer !== null) { clearTimeout(renderTimer); renderTimer = null; }
+      if (thinkingTimer !== null) { clearTimeout(thinkingTimer); thinkingTimer = null; }
+      if (accumulatedThinking) finalizeThinking(accumulatedThinking);
       if (!accumulated) updateContent("_No response._");
 
     } catch (err) {
@@ -245,11 +301,10 @@ export class CopilotChatView extends ItemView {
         const msg = err instanceof Error ? err.message : String(err);
         new Notice(`Copilot error: ${msg}`);
         updateContent(`**Error:** ${msg}`);
-        await this.destroySession();
+        await this.teardown();
       }
     } finally {
       this.setProcessing(false);
-      this.abortController = null;
     }
   }
 
@@ -261,11 +316,39 @@ export class CopilotChatView extends ItemView {
     this.scrollToBottom();
   }
 
-  /** Creates an assistant bubble; returns a function to update its markdown content. */
+  private createThinkingBubble(): { updateThinking: (content: string) => void; finalizeThinking: (content: string) => void } {
+    const wrap = this.messagesEl.createEl("div", { cls: "cva-msg cva-msg-assistant" });
+    const details = wrap.createEl("details", { cls: "cva-thinking" });
+    details.setAttribute("open", "");
+    const summary = details.createEl("summary", { cls: "cva-thinking-summary" });
+    summary.createEl("span", { cls: "cva-thinking-dot" });
+    summary.createEl("span", { text: "Thinking…" });
+    const body = details.createEl("div", { cls: "cva-thinking-body" });
+    this.scrollToBottom();
+
+    const updateThinking = (content: string) => {
+      body.empty();
+      body.setText(content);
+      this.scrollToBottom();
+    };
+
+    const finalizeThinking = (content: string) => {
+      // Update summary label and remove open attr so it collapses by default
+      summary.empty();
+      summary.createEl("span", { cls: "cva-thinking-icon", text: "💭" });
+      summary.createEl("span", { text: "Thought process" });
+      details.removeAttribute("open");
+      body.empty();
+      body.setText(content);
+      this.scrollToBottom();
+    };
+
+    return { updateThinking, finalizeThinking };
+  }
+
   private createStreamingBubble(): { updateContent: (content: string) => void } {
     const wrap = this.messagesEl.createEl("div", { cls: "cva-msg cva-msg-assistant" });
     const bubble = wrap.createEl("div", { cls: "cva-bubble cva-bubble-assistant cva-streaming" });
-    // Show a blinking cursor placeholder while streaming
     bubble.createEl("span", { cls: "cva-cursor", text: "▋" });
     this.scrollToBottom();
 
@@ -297,7 +380,7 @@ export class CopilotChatView extends ItemView {
   }
 
   private async clearChat(): Promise<void> {
-    await this.destroySession();
+    await this.teardown();
     this.messagesEl.empty();
     this.renderWelcome();
     new Notice("Copilot: conversation cleared.");

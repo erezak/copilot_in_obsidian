@@ -1,130 +1,47 @@
-# Copilot Vault Agent — Obsidian Plugin
+# Copilot Vault Agent
 
-Chat with your vault using **GitHub Models** (free, official API) or **GitHub Copilot** (subscription). The AI agent can read, create, and edit notes directly in your vault.
+An Obsidian desktop plugin that provides a Copilot-powered chat panel with access to the open vault. It uses the GitHub Copilot SDK and a locally launched Copilot CLI process.
 
----
+## Requirements
 
-## Features
+- Obsidian 1.4 or later (desktop)
+- A GitHub Copilot subscription and an authenticated Copilot CLI
+- Node.js available on `PATH` when Obsidian starts
 
-- **Sidebar chat panel** — persistent conversation in the right sidebar
-- **Vault-aware tools** — the AI can read, create, and surgically edit `.md` files
-- **Active file context** — the currently open note is automatically included in every message
-- **Confirmation dialogs** — prompts you before any file is written (configurable)
-- **Cancellable** — stop generation mid-stream at any time
-- **Two providers** — GitHub Models (free PAT) or GitHub Copilot (subscription)
-- **Custom endpoint** — works with any OpenAI-compatible API (Ollama, etc.)
+The plugin starts the bundled `@github/copilot` CLI using system Node.js because Obsidian's Electron runtime is not compatible with the CLI's native modules. Sign in to the Copilot CLI in a terminal before using the plugin.
 
----
+## Build and install
 
-## Installation
-
-1. **Build from source**
-   ```bash
-   cd copilot_in_obsidian
-   npm install          # requires Node.js 18+
-   npm run build        # produces main.js
-   ```
-
-2. **Copy to your vault's plugin folder**
-   ```
-   <vault>/.obsidian/plugins/copilot-vault-agent/
-     main.js
-     manifest.json
-     styles.css
-   ```
-
-3. **Enable the plugin** in Obsidian → Settings → Community plugins → Copilot Vault Agent
-
----
-
-## Setup
-
-### GitHub Models (Recommended — free)
-
-1. Go to [github.com/settings/tokens](https://github.com/settings/tokens) → **Generate new token (classic)**
-2. No special scopes required (public access is enough for GitHub Models free tier)
-3. In Obsidian: Settings → Copilot Vault Agent → paste the token → Provider: **GitHub Models**
-
-**Free tier limits:** ~15 requests/min, ~150 000 tokens/day for most models.
-
-### GitHub Copilot (Copilot subscribers)
-
-1. Generate a classic PAT — no special scopes needed; your account just needs an active Copilot subscription
-2. Settings → Provider: **GitHub Copilot**  
-   The plugin automatically exchanges the PAT for a short-lived Copilot session token.
-
-### Custom endpoint
-
-Point to any OpenAI-compatible `/chat/completions` endpoint (local Ollama, LM Studio, etc.).
-
----
-
-## Usage
-
-| Action | How |
-|--------|-----|
-| Open chat | Ribbon icon (**bot**) or `Cmd/Ctrl+P` → *Open Copilot Chat* |
-| Send message | Type + `Enter` (Shift+Enter for newline) |
-| Stop generation | **■ Stop** button |
-| New conversation | **↺** button in chat header |
-| Insert result at cursor | Open a note, ask the AI to write something, then copy from the chat |
-
-### What the AI can do
-
-- **Read notes** — `read_file("path/to/note.md")`
-- **Create notes** — `create_file("path/new.md", content)`
-- **Edit notes** — `replace_in_file("path/note.md", exactOldText, newText)` *(surgical, not full overwrite)*
-- **List files** — `list_files(folder?)` — up to 100 results
-- **Search** — `search_files(query, folder?)` — content + filename search
-
-### Example prompts
-
-```
-Summarise the current note in 3 bullet points.
-
-Find all notes that mention "project Phoenix" and create a new note
-that links them together.
-
-Add a ## Resources section to the current note with links to the
-most relevant notes in my vault.
-
-Create a daily note for today with sections for Goals, Tasks, and Notes.
+```bash
+pnpm install
+pnpm run build
 ```
 
----
+Copy `main.js`, `manifest.json`, `styles.css`, the `node_modules/@github/copilot` package, and the repository's `.github/skills` directory (as `skills/`) into:
 
-## Settings reference
+```text
+<vault>/.obsidian/plugins/copilot-vault-agent/
+```
 
-| Setting | Default | Description |
-|---------|---------|-------------|
-| Provider | GitHub Models | Which AI service to use |
-| GitHub Token | — | PAT for authentication |
-| Model | `openai/gpt-4o` | AI model |
-| Include active file | ✅ | Inject the open note into every message |
-| Confirm file writes | ✅ | Show a dialog before create/edit |
-| History length | 20 | Message pairs kept in memory |
-| Custom system prompt | — | Extra instructions appended to the system prompt |
+Or deploy directly, replacing the path with your plugin directory:
 
----
+```bash
+pnpm run deploy -- /path/to/vault/.obsidian/plugins/copilot-vault-agent
+```
 
-## Security notes
+Enable **Copilot Vault Agent** under Obsidian's community plugin settings.
 
-- The GitHub token is stored **locally in plain text** in Obsidian's plugin data folder (`<vault>/.obsidian/plugins/copilot-vault-agent/data.json`).
-- Use a **minimal-scope token** — for GitHub Models, no scopes are required at all.
-- Note contents sent to the AI leave your machine. Exclude sensitive folders using the folder parameter in prompts, or disable the *Include active file* setting.
+## Use
 
----
+Open the chat from the ribbon icon or the **Open Copilot Chat** command. The chat uses the vault as its working directory, loads the included agent skills, and can attach the active note to each message. The **Stop** button aborts the current response; the header button starts a fresh session.
+
+Settings let you choose a Copilot model, toggle active-note attachments, and append custom instructions to the system prompt. Authentication is handled by the Copilot CLI.
+
+The CLI is granted tool permissions automatically. Copilot can therefore read and modify files in the vault; use it only with vault content you are comfortable making available to Copilot and its tools.
 
 ## Development
 
 ```bash
-npm run dev    # watch mode — rebuilds on save
-npm run build  # production minified build
+pnpm run dev    # watch mode
+pnpm run build  # type-check and production build
 ```
-
-The plugin uses:
-- **esbuild** for bundling
-- **TypeScript** with strict mode
-- **Obsidian ItemView** for the sidebar panel
-- GitHub Models / Copilot **chat completions API** (OpenAI-compatible)
-- **Tool calling** for the agentic loop (read/create/edit files)

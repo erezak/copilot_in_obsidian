@@ -233,6 +233,63 @@
   color: #fc8181;
 }
 
+/* ── Thinking (reasoning) bubble ───────────────────────────────────────────── */
+.cva-thinking {
+  max-width: 88%;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 10px;
+  background: var(--background-primary-alt);
+  overflow: hidden;
+  font-size: var(--font-ui-smaller);
+}
+
+.cva-thinking-summary {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
+  cursor: pointer;
+  color: var(--text-muted);
+  user-select: none;
+  list-style: none;
+  font-style: italic;
+}
+.cva-thinking-summary::-webkit-details-marker { display: none; }
+.cva-thinking-summary::marker { display: none; }
+
+.cva-thinking[open] .cva-thinking-summary {
+  border-bottom: 1px solid var(--background-modifier-border);
+}
+
+.cva-thinking-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--text-accent);
+  flex-shrink: 0;
+  animation: cva-pulse 1s ease-in-out infinite;
+}
+
+@keyframes cva-pulse {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0.25; }
+}
+
+.cva-thinking-icon {
+  font-style: normal;
+  line-height: 1;
+}
+
+.cva-thinking-body {
+  padding: 6px 10px 8px;
+  color: var(--text-muted);
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 240px;
+  overflow-y: auto;
+  line-height: 1.5;
+}
+
 /* ── Status line ────────────────────────────────────────────────────────────── */
 .cva-status {
   flex-shrink: 0;
